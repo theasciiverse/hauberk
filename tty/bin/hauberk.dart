@@ -4,12 +4,16 @@ import 'dart:io';
 
 import 'package:hauberk/src/content.dart';
 import 'package:hauberk/src/engine.dart';
+import 'package:hauberk/src/ui/game/game_screen.dart';
 import 'package:hauberk/src/ui/input.dart';
 import 'package:hauberk/src/ui/menu/main_menu_screen.dart';
 import 'package:hauberk_tty/src/ansi_terminal.dart';
+import 'package:hauberk_tty/src/autopilot.dart';
 import 'package:hauberk_tty/src/keys.dart';
+import 'package:hauberk_tty/src/windows_console.dart';
 import 'package:malison/malison.dart';
 import 'package:malison/malison_web.dart';
+import 'package:piecemeal/piecemeal.dart';
 
 /// Where log lines go when `HAUBERK_LOG` names a file; nowhere otherwise, since
 /// stdout and stderr are the game screen.
@@ -27,13 +31,68 @@ AnsiTerminal? _terminal;
 /// Whether the terminal is below the minimum size and the "too small" message
 /// is showing. The game waits until the terminal is big enough.
 bool _tooSmall = false;
+
+WindowsConsole? _windowsConsole;
+
+/// `--hero NAME`: go straight into the town with this saved hero.
+String? _heroName;
+
+/// `--demo`: a new hero, played by the [Autopilot].
+bool _demo = false;
+
+/// `--quit-after SECONDS`: end the program by itself, for recordings.
+Duration? _quitAfter;
+Autopilot? _autopilot;
+
+const _usage = '''Usage: hauberk [options]
+
+  --hero NAME   start in the town with the saved hero NAME
+  --demo        create a hero and watch the computer play
+  --seed N      seed the random numbers, for a repeatable game
+  --quit-after SECONDS
+                quit by itself after this long, for recordings
+  --version     print the version and exit
+
+Heroes are saved in storage.json in \$HAUBERK_DATA_DIR, %APPDATA%\\hauberk
+on Windows, or \$XDG_DATA_HOME/hauberk (~/.local/share/hauberk).
+HAUBERK_LOG=FILE writes key presses and messages to FILE.''';
 Timer? _timer;
 bool _done = false;
 
 void main(List<String> arguments) {
-  if (arguments.contains('--version')) {
-    stdout.writeln('hauberk (terminal build)');
-    return;
+  for (var i = 0; i < arguments.length; i++) {
+    switch (arguments[i]) {
+      case '--version':
+        stdout.writeln('hauberk (terminal build)');
+        return;
+      case '--help' || '-h':
+        stdout.writeln(_usage);
+        return;
+      case '--demo':
+        _demo = true;
+      case '--hero' when i + 1 < arguments.length:
+        _heroName = arguments[++i];
+      case '--quit-after' when i + 1 < arguments.length:
+        var seconds = double.tryParse(arguments[++i]);
+        if (seconds == null || seconds <= 0) {
+          stderr.writeln('--quit-after needs a number of seconds.');
+          exitCode = 2;
+          return;
+        }
+        _quitAfter = Duration(milliseconds: (seconds * 1000).round());
+      case '--seed' when i + 1 < arguments.length:
+        var seed = int.tryParse(arguments[++i]);
+        if (seed == null) {
+          stderr.writeln('--seed needs a number.');
+          exitCode = 2;
+          return;
+        }
+        rng.setSeed(seed);
+      default:
+        stderr.writeln('Unknown option ${arguments[i]}.\n\n$_usage');
+        exitCode = 2;
+        return;
+    }
   }
 
   if (!stdin.hasTerminal || !stdout.hasTerminal) {
@@ -68,18 +127,24 @@ void _run() {
   stdout.encoding = utf8;
   stdin.echoMode = false;
   stdin.lineMode = false;
+  if (Platform.isWindows) _windowsConsole = WindowsConsole()..enable();
 
   // Alternate screen, hidden cursor, application keypad, cleared screen.
   stdout.write('\x1b[?1049h\x1b[?25l\x1b=\x1b[0m\x1b[2J');
 
   _content = createContent();
 
-  stdin.listen(_input, onDone: _quit);
+  // A closed terminal ends the game like Ctrl+C.
+  stdin.listen(_input, onDone: _quit, onError: (Object _) => _quit());
 
+  // Ctrl+C arrives as a signal, since Dart leaves signals on in raw mode.
+  ProcessSignal.sigint.watch().listen((_) => _quit());
   if (!Platform.isWindows) {
     ProcessSignal.sigterm.watch().listen((_) => _quit());
     ProcessSignal.sighup.watch().listen((_) => _quit());
   }
+
+  if (_quitAfter case var after?) Timer(after, _quit);
 
   _timer = Timer.periodic(
     const Duration(microseconds: 1000000 ~/ 60),
@@ -94,9 +159,39 @@ void _start() {
   _ui = ui;
   _bindKeys(ui);
 
-  ui.push(MainMenuScreen(_content));
+  var menu = MainMenuScreen(_content);
+  ui.push(menu);
   ui.handlingInput = true;
   ui.running = true;
+
+  if (_demo) {
+    var save = _content.createHero(
+      _demoName(menu.storage.heroes.map((hero) => hero.name).toSet()),
+      race: _content.races.firstWhere((race) => race.name == 'Dwarf'),
+      heroClass: _content.classes.firstWhere(
+        (heroClass) => heroClass.name == 'Barbarian',
+      ),
+    );
+    menu.storage.add(save);
+    ui.push(GameScreen.town(menu.storage, _content, save, newHero: true));
+    _autopilot = Autopilot(ui, (line) => _log?.writeln(line));
+  } else if (_heroName case var name?) {
+    for (var save in menu.storage.heroes) {
+      if (save.name == name) {
+        ui.push(GameScreen.town(menu.storage, _content, save));
+        break;
+      }
+    }
+  }
+}
+
+/// A name for the demo hero that no saved hero has.
+String _demoName(Set<String> taken) {
+  var name = 'Brannoc';
+  for (var i = 2; taken.contains(name); i++) {
+    name = 'Brannoc $i';
+  }
+  return name;
 }
 
 /// Shows how big the terminal needs to be, centred.
@@ -136,7 +231,10 @@ void _tick() {
   var width = stdout.terminalColumns;
   var height = stdout.terminalLines;
 
-  if (width < _minWidth || height < _minHeight) {
+  // HAUBERK_ANY_SIZE=1 lifts the minimum, for recording the game screen,
+  // which fits smaller terminals; the menus are then cut off.
+  var anySize = Platform.environment['HAUBERK_ANY_SIZE'] == '1';
+  if (!anySize && (width < _minWidth || height < _minHeight)) {
     if (!_tooSmall ||
         width != _terminal?.width ||
         height != _terminal?.height) {
@@ -162,6 +260,7 @@ void _tick() {
     ui.setTerminal(_makeTerminal());
   }
 
+  _autopilot?.tick();
   ui.refresh();
 }
 
@@ -217,6 +316,7 @@ void _restoreTerminal() {
   try {
     stdin.lineMode = true;
     stdin.echoMode = true;
+    _windowsConsole?.restore();
   } on Object {
     // The terminal may already be gone.
   }
