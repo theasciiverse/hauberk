@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:hauberk/src/content.dart';
+import 'package:hauberk/src/engine.dart';
 import 'package:hauberk/src/ui/input.dart';
 import 'package:hauberk/src/ui/menu/main_menu_screen.dart';
 import 'package:hauberk_tty/src/ansi_terminal.dart';
@@ -14,8 +15,18 @@ import 'package:malison/malison_web.dart';
 /// stdout and stderr are the game screen.
 IOSink? _log;
 
-late final UserInterface<Input> _ui;
+/// The smallest terminal Hauberk's screens are laid out for; its browser
+/// build insists on the same.
+const _minWidth = 80;
+const _minHeight = 40;
+
+late final Content _content;
+UserInterface<Input>? _ui;
 AnsiTerminal? _terminal;
+
+/// Whether the terminal is below the minimum size and the "too small" message
+/// is showing. The game waits until the terminal is big enough.
+bool _tooSmall = false;
 Timer? _timer;
 bool _done = false;
 
@@ -61,13 +72,7 @@ void _run() {
   // Alternate screen, hidden cursor, application keypad, cleared screen.
   stdout.write('\x1b[?1049h\x1b[?25l\x1b=\x1b[0m\x1b[2J');
 
-  var content = createContent();
-  _ui = UserInterface<Input>(_makeTerminal());
-  _bindKeys(_ui);
-
-  _ui.push(MainMenuScreen(content));
-  _ui.handlingInput = true;
-  _ui.running = true;
+  _content = createContent();
 
   stdin.listen(_input, onDone: _quit);
 
@@ -77,9 +82,41 @@ void _run() {
   }
 
   _timer = Timer.periodic(
-    Duration(microseconds: 1000000 ~/ _ui.framesPerSecond),
+    const Duration(microseconds: 1000000 ~/ 60),
     (_) => _tick(),
   );
+  _tick();
+}
+
+/// Starts the user interface on the first terminal that is big enough.
+void _start() {
+  var ui = UserInterface<Input>(_makeTerminal());
+  _ui = ui;
+  _bindKeys(ui);
+
+  ui.push(MainMenuScreen(_content));
+  ui.handlingInput = true;
+  ui.running = true;
+}
+
+/// Shows how big the terminal needs to be, centred.
+void _showTooSmall(int width, int height) {
+  var lines = [
+    'Hauberk needs a terminal of at least ${_minWidth}x$_minHeight.',
+    'This one is ${width}x$height. Make the window bigger',
+    'or the font smaller, or press Ctrl+C to quit.',
+  ];
+
+  var buffer = StringBuffer('\x1b[0m\x1b[2J');
+  var top = (height - lines.length) ~/ 2;
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (line.length > width) line = line.substring(0, width);
+    var x = (width - line.length) ~/ 2;
+    buffer.write('\x1b[${top + i + 1};${x + 1}H$line');
+  }
+  stdout.write(buffer.toString());
+  _log?.writeln('too small: ${width}x$height');
 }
 
 AnsiTerminal _makeTerminal() {
@@ -96,14 +133,36 @@ AnsiTerminal _makeTerminal() {
 void _tick() {
   if (_done) return;
 
-  var terminal = _terminal!;
-  if (stdout.terminalColumns != terminal.width ||
-      stdout.terminalLines != terminal.height) {
-    stdout.write('\x1b[0m\x1b[2J');
-    _ui.setTerminal(_makeTerminal());
+  var width = stdout.terminalColumns;
+  var height = stdout.terminalLines;
+
+  if (width < _minWidth || height < _minHeight) {
+    if (!_tooSmall ||
+        width != _terminal?.width ||
+        height != _terminal?.height) {
+      _tooSmall = true;
+      // Remember the size so the message is redrawn only when it changes.
+      _terminal = AnsiTerminal(width, height, stdout);
+      _showTooSmall(width, height);
+    }
+    return;
   }
 
-  _ui.refresh();
+  var ui = _ui;
+  if (ui == null) {
+    stdout.write('\x1b[0m\x1b[2J');
+    _tooSmall = false;
+    _start();
+    return;
+  }
+
+  if (_tooSmall || width != _terminal!.width || height != _terminal!.height) {
+    _tooSmall = false;
+    stdout.write('\x1b[0m\x1b[2J');
+    ui.setTerminal(_makeTerminal());
+  }
+
+  ui.refresh();
 }
 
 void _input(List<int> bytes) {
@@ -116,8 +175,12 @@ void _input(List<int> bytes) {
       return;
     }
 
+    // Keys wait with the game while the terminal is too small.
+    var ui = _ui;
+    if (ui == null || _tooSmall) continue;
+
     // The browser game never quits; here q or Escape on the main menu does.
-    if (_ui.topScreen is MainMenuScreen &&
+    if (ui.topScreen is MainMenuScreen &&
         !key.shift &&
         !key.alt &&
         (key.keyCode == KeyCode.q || key.keyCode == KeyCode.escape)) {
@@ -128,14 +191,14 @@ void _input(List<int> bytes) {
     // A terminal sends no key releases and cannot report Shift held on its
     // own. Hauberk's item screens inspect items while Shift is held, so press
     // and release it around every shifted key.
-    if (key.shift) _ui.keyDown(KeyCode.shift, shift: true, alt: key.alt);
-    _ui.keyDown(key.keyCode, shift: key.shift, alt: key.alt);
-    _ui.keyUp(key.keyCode, shift: key.shift, alt: key.alt);
-    if (key.shift) _ui.keyUp(KeyCode.shift, alt: key.alt);
+    if (key.shift) ui.keyDown(KeyCode.shift, shift: true, alt: key.alt);
+    ui.keyDown(key.keyCode, shift: key.shift, alt: key.alt);
+    ui.keyUp(key.keyCode, shift: key.shift, alt: key.alt);
+    if (key.shift) ui.keyUp(KeyCode.shift, alt: key.alt);
   }
 
   // Draw the result now rather than on the next tick.
-  _ui.refresh();
+  if (!_tooSmall) _ui?.refresh();
 }
 
 void _quit() {

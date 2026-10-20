@@ -56,7 +56,8 @@ class AnsiTerminal extends RenderableTerminal {
         if (_shown[i] == glyph) continue;
         _shown[i] = glyph;
 
-        if (x != cursorX || y != cursorY) buffer.write('\x1b[${y + 1};${x + 1}H');
+        if (x != cursorX || y != cursorY)
+          buffer.write('\x1b[${y + 1};${x + 1}H');
 
         if (glyph.fore != fore) {
           fore = glyph.fore;
@@ -69,7 +70,8 @@ class AnsiTerminal extends RenderableTerminal {
 
         var char = glyph.char;
         // Control characters and lone surrogates would upset the terminal.
-        if (char < 32 || (char >= 0x7f && char < 0xa0) ||
+        if (char < 32 ||
+            (char >= 0x7f && char < 0xa0) ||
             (char >= 0xd800 && char < 0xe000)) {
           char = 32;
         }

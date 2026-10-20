@@ -178,7 +178,8 @@ KeyPress? _csiKey(String params, int finalByte) {
 /// `ESC O x`: cursor keys in application mode, F1 to F4 and the keypad in
 /// application keypad mode.
 KeyPress? _ss3Key(int byte) {
-  if (byte >= 0x70 && byte <= 0x79) return KeyPress(KeyCode.numpad0 + byte - 0x70);
+  if (byte >= 0x70 && byte <= 0x79)
+    return KeyPress(KeyCode.numpad0 + byte - 0x70);
 
   return switch (String.fromCharCode(byte)) {
     'A' => const KeyPress(KeyCode.up),

@@ -1,0 +1,5 @@
+# Hauberk's own options include package:lints, which this package does not
+# depend on.
+analyzer:
+  exclude:
+    - build/**
