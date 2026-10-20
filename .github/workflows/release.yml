@@ -1,0 +1,106 @@
+# Builds Hauberk's terminal edition for the Asciiverse catalog: one archive
+# per target, named <id>-<target>.tar.gz (Linux, macOS) or .zip (Windows),
+# plus a SHA256SUMS file, attached to a GitHub release
+# (hub/catalog/SCHEMA.md, release.source = "github"). Runs on our tags
+# (*-av.*), or by hand for an existing tag.
+#
+# dart compile exe builds for the machine it runs on, so every target has its
+# own runner. The executable carries the Dart runtime and needs nothing
+# installed; on Linux it links glibc (2.18 or newer), hence the -gnu triples.
+
+name: release
+
+on:
+  push:
+    tags: ["*-av.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to build and release"
+        required: true
+
+env:
+  ID: hauberk
+  BIN: hauberk
+  DART: "3.13.6"
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, arch: x64 }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, arch: arm64 }
+          - { target: x86_64-apple-darwin, runner: macos-15-intel, arch: x64 }
+          - { target: aarch64-apple-darwin, runner: macos-14, arch: arm64 }
+          - { target: x86_64-pc-windows-msvc, runner: windows-2022, arch: x64 }
+          - { target: aarch64-pc-windows-msvc, runner: windows-11-arm, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ env.DART }}
+          architecture: ${{ matrix.arch }}
+
+      - name: Build
+        working-directory: tty
+        run: |
+          ext=""
+          [ "$RUNNER_OS" = Windows ] && ext=".exe"
+          dart pub get
+          mkdir -p ../stage
+          dart compile exe bin/hauberk.dart -o "../stage/$BIN$ext"
+          dart run tool/licenses.dart ../stage/THIRD-PARTY-LICENSES.txt
+          # a quick check that it starts
+          "../stage/$BIN$ext" --version
+
+      - name: Package
+        run: |
+          out="$ID-${{ matrix.target }}"
+          # the binary sits at the top of the archive, where av looks for it
+          cp COPYRIGHT README.md PATCHES.md stage/
+          mkdir -p dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            pwsh -NoProfile -Command "Compress-Archive -Path stage/* -DestinationPath dist/$out.zip"
+          else
+            tar -czf "dist/$out.tar.gz" -C stage .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "Hauberk $TAG" \
+                 --notes "Hauberk from github.com/munificent/hauberk as a terminal game, with the changes in PATCHES.md, built for the Asciiverse catalog."
+          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber
