@@ -1,0 +1,17 @@
+name: hauberk_tty
+description: Hauberk in a text terminal.
+publish_to: none
+environment:
+  sdk: '^3.8.0'
+dependencies:
+  hauberk:
+    path: ..
+  malison: any
+  piecemeal: '^2.0.0'
+dependency_overrides:
+  # The browser-free malison and the package:web stand-in, so Hauberk's own
+  # library compiles natively without changes.
+  malison:
+    path: malison
+  web:
+    path: web_stub

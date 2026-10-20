@@ -1,0 +1,9 @@
+name: web
+version: 1.1.1
+description: >-
+  Stand-in for package:web in the native terminal build of Hauberk. Provides
+  only what Hauberk's own save code uses: window.localStorage, kept in a JSON
+  file in the player's data folder, and window.location.search.
+publish_to: none
+environment:
+  sdk: "^3.8.0"
