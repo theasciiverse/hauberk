@@ -1,3 +1,3 @@
-export 'src/canvas_terminal.dart';
-export 'src/retro_terminal.dart';
+// The browser terminals are gone in this native build; what remains is the
+// screen stack, which the host program drives with keys and frames.
 export 'src/user_interface.dart';

@@ -1,8 +1,4 @@
-import 'dart:async';
-import 'dart:js_interop';
-
 import 'package:piecemeal/piecemeal.dart';
-import 'package:web/web.dart' as web;
 
 import 'key_bindings.dart';
 import 'terminal.dart';
@@ -23,66 +19,25 @@ class UserInterface<T> {
   RenderableTerminal? _terminal;
   bool _dirty = true;
 
-  StreamSubscription<web.KeyboardEvent>? _keyDownSubscription;
-  StreamSubscription<web.KeyboardEvent>? _keyUpSubscription;
-
-  late final JSExportedDartFunction _tickJS = _tick.toJS;
-
-  /// Whether or not the UI is listening for keyboard events.
+  /// Whether or not the host forwards keyboard events to [keyDown] and
+  /// [keyUp].
   ///
   /// Initially off.
-  bool get handlingInput => _keyDownSubscription != null;
+  bool handlingInput = false;
 
-  set handlingInput(bool value) {
-    if (value == handlingInput) return;
-
-    if (value) {
-      _keyDownSubscription = web.document.body!.onKeyDown.listen(_keyDown);
-      _keyUpSubscription = web.document.body!.onKeyUp.listen(_keyUp);
-    } else {
-      _keyDownSubscription?.cancel();
-      _keyDownSubscription = null;
-
-      _keyUpSubscription?.cancel();
-      _keyUpSubscription = null;
-    }
-  }
-
-  /// Whether or not the game loop is running and the UI is refreshing itself
-  /// every frame.
+  /// Whether or not the host is calling [refresh()] every frame.
   ///
   /// Initially off.
-  ///
-  /// If you want to manually refresh the UI yourself when you know it needs
-  /// to be updated -- maybe your game is explicitly turn-based -- you can
-  /// leave this off.
-  bool get running => _running;
-  bool _running = false;
+  bool running = false;
 
   /// The rate that [refresh()] should ideally be called at when [running] is
   /// `true`.
   int framesPerSecond = 60;
 
-  /// The time of the last [requestAnimationFrame] call that led to a
-  /// [refresh()].
-  ///
-  /// We use this to control the frame rate. A new [refresh()] call only occurs
-  /// after the current time is larger than the frame time.
-  num? _lastRefreshTime;
-
-  set running(bool value) {
-    if (value == _running) return;
-
-    _running = value;
-    if (_running) {
-      // Reset the start time so that we refresh immediately.
-      _lastRefreshTime = null;
-
-      web.window.requestAnimationFrame(_tickJS);
-    }
-  }
-
   UserInterface([this._terminal]);
+
+  /// The screen on top of the stack, which gets the input, if any.
+  Screen<T>? get topScreen => _screens.isEmpty ? null : _screens.last;
 
   void setTerminal(RenderableTerminal terminal) {
     var resized =
@@ -145,76 +100,25 @@ class UserInterface<T> {
     if (_dirty) _render();
   }
 
-  void _keyDown(web.KeyboardEvent event) {
-    var keyCode = event.keyCode;
+  /// Handles a key press from the host.
+  void keyDown(int keyCode, {bool shift = false, bool alt = false}) {
+    if (!handlingInput || _screens.isEmpty) return;
 
-    // If the keypress happened on the numpad, translate the keyCode.
-    if (event.location == 3) {
-      keyCode = switch (keyCode) {
-        KeyCode.zero => KeyCode.numpad0,
-        KeyCode.one => KeyCode.numpad1,
-        KeyCode.two => KeyCode.numpad2,
-        KeyCode.three => KeyCode.numpad3,
-        KeyCode.four => KeyCode.numpad4,
-        KeyCode.five => KeyCode.numpad5,
-        KeyCode.six => KeyCode.numpad6,
-        KeyCode.seven => KeyCode.numpad7,
-        KeyCode.eight => KeyCode.numpad8,
-        KeyCode.nine => KeyCode.numpad9,
-        KeyCode.equals => KeyCode.numpadEquals,
-        KeyCode.enter => KeyCode.numpadEnter,
-        _ => keyCode,
-      };
-    }
-
-    // Firefox uses 59 for semicolon.
-    if (keyCode == 59) keyCode = KeyCode.semicolon;
-
-    var input = keyPress.find(
-      keyCode,
-      shift: event.shiftKey,
-      alt: event.altKey,
-    );
+    var input = keyPress.find(keyCode, shift: shift, alt: alt);
 
     var screen = _screens.last;
     if (input != null) {
-      // Bound keys are always consumed, even if the screen doesn't use it.
-      event.preventDefault();
       if (screen.handleInput(input)) return;
     }
 
-    if (screen.keyDown(keyCode, shift: event.shiftKey, alt: event.altKey)) {
-      event.preventDefault();
-    }
+    screen.keyDown(keyCode, shift: shift, alt: alt);
   }
 
-  void _keyUp(web.KeyboardEvent event) {
-    var keyCode = event.keyCode;
+  /// Handles a key release from the host.
+  void keyUp(int keyCode, {bool shift = false, bool alt = false}) {
+    if (!handlingInput || _screens.isEmpty) return;
 
-    // Firefox uses 59 for semicolon.
-    if (keyCode == 59) keyCode = KeyCode.semicolon;
-
-    var screen = _screens.last;
-    if (screen.keyUp(keyCode, shift: event.shiftKey, alt: event.altKey)) {
-      event.preventDefault();
-    }
-  }
-
-  /// Called every animation frame while the UI's game loop is running.
-  void _tick(num time) {
-    if (_lastRefreshTime case var start?) {
-      // If more than a frame's time has passed, it's time to refresh.
-      if (time - start > 1000 / framesPerSecond) {
-        refresh();
-        _lastRefreshTime = time;
-      }
-    } else {
-      // Always refresh the first frame.
-      refresh();
-      _lastRefreshTime = time;
-    }
-
-    if (_running) web.window.requestAnimationFrame(_tickJS);
+    _screens.last.keyUp(keyCode, shift: shift, alt: alt);
   }
 
   void _render() {

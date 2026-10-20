@@ -1,13 +1,11 @@
 name: malison
 version: 0.14.0
-description: A little terminal UI package for the browser.
+description: >-
+  Malison 0.14.0 adapted for a native terminal build of Hauberk: the canvas
+  terminals are removed and the user interface is driven by its host.
 homepage: https://github.com/munificent/malison
+publish_to: none
 dependencies:
   piecemeal: "^2.0.0"
-  web: "^1.1.1"
-dev_dependencies:
-  build_runner: any
-  build_web_compilers: any
-  lints: "^6.0.0"
 environment:
   sdk: "^3.8.0"
