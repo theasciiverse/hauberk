@@ -46,3 +46,9 @@ build/hauberk`.
 (the Dart runtime and each package) into THIRD-PARTY-LICENSES.txt.
 `asciiverse/record-preview.sh` records `asciiverse/hauberk.cast`, the
 catalog preview: `--demo` at 100x30, seed 1, 55 seconds.
+
+## Ours
+
+- **How to play it, at the top of README.md.** A short note on installing and
+  starting it with av, or from a release archive; the original text follows
+  unchanged.

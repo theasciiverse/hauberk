@@ -1,3 +1,16 @@
+> **Play it with Asciiverse.** With [av](https://asciiverse.sh), the Asciiverse
+> client:
+>
+> ```
+> av install hauberk
+> av play hauberk
+> ```
+>
+> Or download the archive for your system from this repository's Releases,
+> unpack it and run `./hauberk` (`hauberk.exe` on Windows).
+>
+> The original README follows.
+
 ![Splash screen][splash]
 
 Hauberk is a [roguelike][], an ASCII-art based procedurally-generated dungeon
